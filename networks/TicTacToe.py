@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-class TicTacToeNetwork(object):
+class Net(object):
   def __init__(self,FILTERS=16,RES_BLOCKS=5,REG_FACTOR=0.0001,MOMENTUM_PARAM=0.9):
     self.FILTERS=FILTERS
     self.RES_BLOCKS=RES_BLOCKS

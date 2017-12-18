@@ -1,6 +1,6 @@
 import numpy as np
 
-class TicTacToe(object):
+class Game(object):
     def __init__(self):
         pass
     
