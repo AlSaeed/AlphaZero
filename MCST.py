@@ -6,11 +6,13 @@ class _Node(object):
     def __init__(self, state, tree, noise=False):
         self._GAME = tree.GAME
         self._STATE = state
+        self._P = self._GAME.player(state)
         self._DIRICHLET_PARAMETER = tree.DIRICHLET_PARAMETER
         self._EPSILON = tree.EPSILON
         self._C_PUCT = tree.C_PUCT
         self._ACTIONS_SHAPE = self._GAME.actionsShape()
         self._LEAF = self._GAME.score(state) != None
+        self._VALID_MOVES_MASK = self._GAME.validMoves(state)
 
         self._noise = noise
         self._priorComputed = False
@@ -21,7 +23,7 @@ class _Node(object):
         self._structs = np.zeros((5,) + self._ACTIONS_SHAPE, np.float32)
 
     def addNetResults(self, rawPrior, W):
-        mask = self._GAME.validMoves(self._STATE)
+        mask = self._VALID_MOVES_MASK
         maskedPrior = rawPrior * mask
         # Normalization by dividing over total sum
         prior = maskedPrior / np.sum(maskedPrior)
@@ -37,10 +39,21 @@ class _Node(object):
         if noise:
             numberOfActions = np.prod(self._ACTIONS_SHAPE)
             dirichletList = np.ones([numberOfActions]) * self._DIRICHLET_PARAMETER
-            dirichletNoise = np.random.dirichlet(dirichletList).reshape(self._ACTIONS_SHAPE)
-            self._structs[4] = (1 - self._EPSILON) * self._structs[3] + self._EPSILON * dirichletNoise
+            mask = self._VALID_MOVES_MASK
+            rawNoise = np.random.dirichlet(dirichletList).reshape(self._ACTIONS_SHAPE)
+            maskedNoise = rawNoise * mask
+            noise = maskedNoise / np.sum(maskedNoise)
+            self._structs[4] = (1 - self._EPSILON) * self._structs[3] + self._EPSILON * noise
         else:
             self._structs[4] = self._structs[3]
+
+    def _sanityCheck(self,X):
+        if np.sum(X*(1-self._VALID_MOVES_MASK))>0.001:
+            print "HUGE PROBLEM:"
+            print self._GAME.stringify(self._STATE)
+            print "---"
+            print X
+            print "_______________________"
 
     def select(self):
         if self._LEAF:
@@ -49,7 +62,7 @@ class _Node(object):
         N = self.getN()
         P = self.getUsedPriors()
         U = self._C_PUCT * math.sqrt(0.001 + np.sum(N)) * P / (1 + N)  # Added 0.001 to break ties when N=0
-        A = U + Q
+        A = U + Q - 100 * (1-self._VALID_MOVES_MASK) #To make sure no illegal move is selected
         return np.unravel_index(np.argmax(A), self._ACTIONS_SHAPE)
 
     def isLeaf(self):
@@ -83,6 +96,15 @@ class _Node(object):
     def getUsedPriors(self):
         return self._structs[4]
 
+    def getState(self):
+        return self._STATE
+
+    def getPlayer(self):
+        return self._P
+
+    def getPriorComputed(self):
+        return self._priorComputed
+
 
 class _Worker(object):
     def __init__(self, tree):
@@ -109,8 +131,9 @@ class _Worker(object):
         # For simple notation
         node = self._node
         chain = self._chain
+
         # New simulation
-        if not node:
+        if len(chain) == 0:
             self._node = node = self.root
             self._chain = chain = [(self._node, None)]
 
@@ -119,8 +142,8 @@ class _Worker(object):
             node.addNetResults(netResult[0], netResult[1])
         while True:
             # Compute Priors for this state
-            if not node._priorComputed:
-                return node._STATE
+            if not node.getPriorComputed():
+                return node.getState()
             # Simulation done
             if node.isLeaf() or len(chain) == self._MAX_DEPTH:
                 self._processChain()
@@ -154,14 +177,23 @@ class MCST(object):
     def getN(self):
         return self.root.getN()
 
-    def simulate(self, number_of_simulations):
+    def getQ(self):
+        return self.root.getQ()
+
+    def getState(self):
+        return self.root.getState()
+
+    def getPlayer(self):
+        return self.root.getPlayer()
+
+    def simulate(self, number_of_rollouts):
         MB = self.MINI_BATCH_SIZE
         workers = [_Worker(self) for _ in range(MB)]
         networkInput = np.ndarray((MB,) + self.GAME.stateShape())
         networkOutput = [None for _ in range(MB)]
         total_simulated = 0
         workerIndex = 0
-        while total_simulated < number_of_simulations:
+        while total_simulated < number_of_rollouts:
             workerMessage = workers[workerIndex].work(networkOutput[workerIndex])
             networkOutput[workerIndex] = None
             if type(workerMessage) == type(None):
