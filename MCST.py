@@ -11,7 +11,7 @@ class _Node(object):
         self._EPSILON = tree.EPSILON
         self._C_PUCT = tree.C_PUCT
         self._ACTIONS_SHAPE = self._GAME.actionsShape()
-        self._LEAF = self._GAME.score(state) != None
+        self._LEAF = self._GAME.score(state) is not None
         self._VALID_MOVES_MASK = self._GAME.validMoves(state)
 
         self._noise = noise
@@ -196,7 +196,7 @@ class MCST(object):
         while total_simulated < number_of_rollouts:
             workerMessage = workers[workerIndex].work(networkOutput[workerIndex])
             networkOutput[workerIndex] = None
-            if type(workerMessage) == type(None):
+            if workerMessage is None:
                 total_simulated += 1
                 continue
             networkInput[workerIndex] = workerMessage
