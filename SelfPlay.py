@@ -44,9 +44,14 @@ class SelfPlay(object):
                 tree.simulate(self._ROLLOUTS_PER_MOVE)
             else:
                 tree.simulate(self._ROLLOUTS_PER_MOVE - tree.getTotalN())
-
-            N_tao = np.power(tree.getN(), 1.0/tao)
-            pi = N_tao / np.sum(N_tao)
+            if tao == 0:
+                N = tree.getN()
+                mx = np.max(N)
+                pi = (N == mx).astype(np.float32)
+                pi /= np.sum(pi)
+            else:
+                N_tao = np.power(tree.getN(), 1.0/tao)
+                pi = N_tao / np.sum(N_tao)
             v = np.max(tree.getQ())
             if v_resign is not None:
                 if v < v_resign:
