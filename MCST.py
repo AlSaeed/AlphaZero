@@ -19,8 +19,8 @@ class _Node(object):
         self.W = None
 
         self._children = np.ndarray(self._ACTIONS_SHAPE, object)
-        # (N,W,Q,Prior,Modified Prior)
-        self._structs = np.zeros((5,) + self._ACTIONS_SHAPE, np.float32)
+        # (N,W,Q,Prior)
+        self._structs = np.zeros((4,) + self._ACTIONS_SHAPE, np.float32)
 
     def addNetResults(self, rawPrior, W):
         mask = self._VALID_MOVES_MASK
@@ -30,39 +30,33 @@ class _Node(object):
         self._priorComputed = True
         self._structs[3] = prior
         self.W = W
-        self.addNoise(self._noise)
 
-    def addNoise(self, noise):
+    def setNoise(self, noise):
         self._noise = noise
+
+    def _getEffectivePrior(self):
         if not self._priorComputed:
             return
-        if noise:
+        if self._noise:
             numberOfActions = np.prod(self._ACTIONS_SHAPE)
             dirichletList = np.ones([numberOfActions]) * self._DIRICHLET_PARAMETER
             mask = self._VALID_MOVES_MASK
             rawNoise = np.random.dirichlet(dirichletList).reshape(self._ACTIONS_SHAPE)
             maskedNoise = rawNoise * mask
             noise = maskedNoise / np.sum(maskedNoise)
-            self._structs[4] = (1 - self._EPSILON) * self._structs[3] + self._EPSILON * noise
+            return (1 - self._EPSILON) * self.getPriors() + self._EPSILON * noise
         else:
-            self._structs[4] = self._structs[3]
-
-    def _sanityCheck(self,X):
-        if np.sum(X*(1-self._VALID_MOVES_MASK))>0.001:
-            print "HUGE PROBLEM:"
-            print self._GAME.stringify(self._STATE)
-            print "---"
-            print X
-            print "_______________________"
+            return self.getPriors()
 
     def select(self):
         if self._LEAF:
             return None
         Q = self.getQ()
         N = self.getN()
-        P = self.getUsedPriors()
+        # Under the assumption that a new noise is used every time.
+        P = self._getEffectivePrior()
         U = self._C_PUCT * math.sqrt(0.001 + np.sum(N)) * P / (1 + N)  # Added 0.001 to break ties when N=0
-        A = U + Q - 100 * (1-self._VALID_MOVES_MASK) #To make sure no illegal move is selected
+        A = U + Q + 10000 * self._VALID_MOVES_MASK  # To make sure no illegal move is selected
         return np.unravel_index(np.argmax(A), self._ACTIONS_SHAPE)
 
     def isLeaf(self):
@@ -75,13 +69,13 @@ class _Node(object):
         self._children[a] = n
 
     def getStruct(self, a):
-        rst = np.ndarray([5], np.float32)
-        for i in range(5):
+        rst = np.ndarray([4], np.float32)
+        for i in range(4):
             rst[i] = self._structs[i][a]
         return rst
 
     def setStruct(self, a, s):
-        for i in range(5):
+        for i in range(4):
             self._structs[i][a] = s[i]
 
     def getN(self):
@@ -90,11 +84,8 @@ class _Node(object):
     def getQ(self):
         return self._structs[2]
 
-    def getTruePriors(self):
+    def getPriors(self):
         return self._structs[3]
-
-    def getUsedPriors(self):
-        return self._structs[4]
 
     def getState(self):
         return self._STATE
@@ -102,7 +93,7 @@ class _Node(object):
     def getPlayer(self):
         return self._P
 
-    def getPriorComputed(self):
+    def isPriorComputed(self):
         return self._priorComputed
 
 
@@ -118,11 +109,17 @@ class _Worker(object):
     def _processChain(self):
         chain = self._chain
         W = chain[-1][0].W
+        if chain[-1][0].getPlayer() == 1:
+            W = -W
+        # I will assume the backed up value is the true game outcome when available
+        S = self._GAME.score(chain[-1][0].getState())
+        if S is not None:
+            W = S
         for (node, a) in chain[:-1]:
             s = node.getStruct(a)
             s[0] += 1
-            s[1] += W
-            s[2] = s[1] / s[0]
+            s[1] += (1 if node.getPlayer() == 0 else -1) * W
+            s[2] = 1.0 * s[1] / s[0]
             node.setStruct(a, s)
         self._node = None
         self._chain = []
@@ -138,11 +135,11 @@ class _Worker(object):
             self._chain = chain = [(self._node, None)]
 
         # Prior computed for current node
-        if netResult and not node._priorComputed:
+        if netResult is not None and not node.isPriorComputed():
             node.addNetResults(netResult[0], netResult[1])
         while True:
             # Compute Priors for this state
-            if not node.getPriorComputed():
+            if not node.isPriorComputed():
                 return node.getState()
             # Simulation done
             if node.isLeaf() or len(chain) == self._MAX_DEPTH:
@@ -152,16 +149,16 @@ class _Worker(object):
             a = node.select()
             chain[-1] = (chain[-1][0], a)
             newNode = node.getChild(a)
-            if not newNode:
-                newNode = _Node(self._GAME.nextState(node._STATE, a), self._TREE)
+            if newNode is None:
+                newNode = _Node(self._GAME.nextState(node.getState(), a), self._TREE)
                 node.setChild(a, newNode)
             self._node = node = newNode
             chain += [(node, None)]
 
 
 class MCST(object):
-    def __init__(self, game, network_inference_function, c_puct, dirichlet_parameter=0.03, epsilon=0.25,
-                 mini_batch_size=8, maximum_simulation_depth=500):
+    def __init__(self, game, network_inference_function, c_puct, dirichlet_parameter, epsilon, mini_batch_size,
+                 maximum_simulation_depth):
         self.GAME = game
         self._NET_INFERENCE_FUNCTION = network_inference_function
         self.C_PUCT = c_puct
@@ -207,8 +204,10 @@ class MCST(object):
 
     def makeMove(self, a):
         c = self.root.getChild(a)
-        if not c:
-            self.root = _Node(self.GAME.nextState(self.root, a), self, True)
+        if c is None:
+            s = self.root.getState()
+            nextState = self.GAME.nextState(s, a)
+            self.root = _Node(nextState, self, True)
         else:
             self.root = c
-            c.addNoise(True)
+            c.setNoise(True)
