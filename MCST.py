@@ -158,7 +158,7 @@ class _Worker(object):
 
 class MCST(object):
     def __init__(self, game, network_inference_function, c_puct, dirichlet_parameter, epsilon, mini_batch_size,
-                 maximum_simulation_depth):
+                 maximum_simulation_depth, initial_state=None):
         self.GAME = game
         self._NET_INFERENCE_FUNCTION = network_inference_function
         self.C_PUCT = c_puct
@@ -166,7 +166,10 @@ class MCST(object):
         self.DIRICHLET_PARAMETER = dirichlet_parameter
         self.MINI_BATCH_SIZE = mini_batch_size
         self.MAX_SIMULATION_DEPTH = maximum_simulation_depth
-        self.root = _Node(game.initialState(), self, True)
+        if initial_state is None:
+            self.root = _Node(game.initialState(), self, True)
+        else:
+            self.root = _Node(initial_state, self, True)
 
     def getTotalN(self):
         return np.sum(self.root.getN())
