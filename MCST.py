@@ -38,12 +38,12 @@ class _Node(object):
         if not self._priorComputed:
             return
         if self._noise:
-            numberOfActions = np.prod(self._ACTIONS_SHAPE)
-            dirichletList = np.ones([numberOfActions]) * self._DIRICHLET_PARAMETER
-            mask = self._VALID_MOVES_MASK
-            rawNoise = np.random.dirichlet(dirichletList).reshape(self._ACTIONS_SHAPE)
-            maskedNoise = rawNoise * mask
-            noise = maskedNoise / np.sum(maskedNoise)
+            dirichletList = np.ones([np.sum(self._VALID_MOVES_MASK)]) * self._DIRICHLET_PARAMETER
+            rawNoise = np.random.dirichlet(dirichletList)
+            noise = np.zeros(self._ACTIONS_SHAPE)
+            for (i, a) in enumerate(
+                    map(lambda x: x[0], filter(lambda x: x[1] == 1, np.ndenumerate(self._VALID_MOVES_MASK)))):
+                noise[a] = rawNoise[i]
             return (1 - self._EPSILON) * self.getPriors() + self._EPSILON * noise
         else:
             return self.getPriors()
